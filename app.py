@@ -11,6 +11,11 @@ import zipfile
 
 from dotenv import load_dotenv
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from candidate_generator import CandidateGenerator
 from evaluator import evaluate_candidate
@@ -60,6 +65,116 @@ def _candidate_payload(parsed, source_file: str, ranked_promos: list) -> dict:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "promos": [promo.to_dict() for promo in ranked_promos],
     }
+
+
+def _build_pdf_report(export_payload: dict) -> bytes:
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=LETTER,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+        title="Kuku AI Promo Report",
+        author="Kuku AI Generalist Assignment",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Title"]
+    section_style = styles["Heading2"]
+    sub_style = styles["Heading3"]
+    body = styles["BodyText"]
+    body.spaceAfter = 6
+
+    small = ParagraphStyle(
+        "Small",
+        parent=body,
+        fontSize=9,
+        leading=11,
+        spaceAfter=4,
+    )
+
+    story = []
+    story.append(Paragraph("Kuku AI Promo Report", title_style))
+    story.append(Spacer(1, 0.12 * inch))
+    story.append(Paragraph("Batch summary for top ranked microdrama promos.", body))
+    story.append(Spacer(1, 0.12 * inch))
+
+    summary_data = [
+        ["Generated", export_payload.get("generated_at_utc", "")],
+        ["Episodes", str(export_payload.get("episodes", 0))],
+        ["Batch sources", str(len(export_payload.get("batch_source", [])))],
+        ["Promos in report", str(len(export_payload.get("promos", [])))],
+    ]
+    summary_table = Table(summary_data, colWidths=[1.5 * inch, 5.8 * inch])
+    summary_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("LEADING", (0, 0), (-1, -1), 11),
+            ]
+        )
+    )
+    story.append(summary_table)
+    story.append(Spacer(1, 0.18 * inch))
+    story.append(Paragraph("How to read this report", section_style))
+    story.append(Paragraph(
+        "Each promo is a candidate clip extracted from the batch, scored for hook, cliffhanger, and clarity. "
+        "The episode label shows which source file produced it.",
+        body,
+    ))
+    story.append(Spacer(1, 0.1 * inch))
+
+    for idx, promo in enumerate(export_payload.get("promos", []), start=1):
+        story.append(Paragraph(f"Promo #{idx}: {escape(str(promo.get('episode_title', 'Untitled')))}", section_style))
+        story.append(Spacer(1, 0.06 * inch))
+
+        promo_summary = [
+            ["Source file", promo.get("source_file", "")],
+            ["Episode", promo.get("episode_title", "")],
+            ["Composite score", f"{promo.get('composite_score', 0):.2f}"],
+            ["Duration", f"{promo.get('duration_sec', 0):.1f} sec"],
+            ["Start → End", f"{promo.get('start_timestamp_fmt', '')} → {promo.get('end_timestamp_fmt', '')}"],
+        ]
+        promo_table = Table(promo_summary, colWidths=[1.4 * inch, 6.0 * inch])
+        promo_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                    ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("LEADING", (0, 0), (-1, -1), 11),
+                ]
+            )
+        )
+        story.append(promo_table)
+        story.append(Spacer(1, 0.06 * inch))
+
+        story.append(Paragraph(f"Hook: {escape(str(promo.get('evaluation', {}).get('hook_element', '')))}", body))
+        story.append(Paragraph(f"Cliffhanger: {escape(str(promo.get('evaluation', {}).get('cliffhanger_element', '')))}", body))
+        story.append(Paragraph(f"Justification: {escape(str(promo.get('evaluation', {}).get('justification', '')))}", body))
+
+        flags = promo.get("diagnostics") or []
+        story.append(Paragraph("Quality flags: " + (", ".join(map(str, flags)) if flags else "None"), small))
+        story.append(Spacer(1, 0.12 * inch))
+
+    def _page_number(canvas, doc_obj):
+        canvas.setFont("Helvetica", 9)
+        canvas.drawRightString(7.5 * inch, 0.5 * inch, f"Page {doc_obj.page}")
+
+    doc.build(story, onFirstPage=_page_number, onLaterPages=_page_number)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
 
 
 def _load_batch_texts(uploads: list) -> list[tuple[str, str]]:
@@ -211,14 +326,24 @@ def main() -> None:
         "promos": [promo.to_dict() for promo in ranked],
     }
     export_json = json.dumps(export_payload, ensure_ascii=False, indent=2)
+    export_pdf = _build_pdf_report(export_payload)
 
     st.divider()
-    st.download_button(
-        label="Download results as JSON",
-        data=export_json,
-        file_name=f"{_safe_filename('batch')}_promos.json",
-        mime="application/json",
-    )
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            label="Download results as JSON",
+            data=export_json,
+            file_name=f"{_safe_filename('batch')}_promos.json",
+            mime="application/json",
+        )
+    with c2:
+        st.download_button(
+            label="Download report as PDF",
+            data=export_pdf,
+            file_name=f"{_safe_filename('batch')}_promos.pdf",
+            mime="application/pdf",
+        )
 
     with st.expander("Raw JSON Preview", expanded=False):
         st.code(export_json, language="json")

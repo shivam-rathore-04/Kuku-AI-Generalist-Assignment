@@ -37,6 +37,18 @@ CLIFF_TYPES = [
     "none",
 ]
 
+EMOTIONAL_PROMISES = [
+    "justice_revenge",
+    "secret_identity_reveal",
+    "betrayal_exposed",
+    "romantic_tension",
+    "forbidden_love",
+    "protective_hero",
+    "family_conflict",
+    "survival_threat",
+    "none",
+]
+
 
 class PromoEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,6 +59,8 @@ class PromoEvaluation(BaseModel):
     hook_type: str = Field("none", description="Category of the hook")
     cliffhanger_type: str = Field("none", description="Category of the cliffhanger")
     resolution_leak: bool = Field(False, description="True if the clip itself resolves/answers the tension before it ends")
+    emotional_promise: str = Field("none", description="Main feeling the clip promises the full show will pay off")
+    protagonist_clear: bool = Field(False, description="True only if a sympathetic lead the viewer can root for is identifiable in the clip")
 
     hook_interrupt: Optional[int] = Field(None, ge=1, le=10)
     hook_curiosity: Optional[int] = Field(None, ge=1, le=10)
@@ -54,6 +68,7 @@ class PromoEvaluation(BaseModel):
     cliff_open_loop: Optional[int] = Field(None, ge=1, le=10)
     cliff_stakes: Optional[int] = Field(None, ge=1, le=10)
     cliff_cut_timing: Optional[int] = Field(None, ge=1, le=10)
+    audience_fit: Optional[int] = Field(None, ge=1, le=10)
 
     hook_score: int = Field(..., ge=1, le=10)
     cliffhanger_score: int = Field(..., ge=1, le=10)
@@ -71,12 +86,15 @@ PROMO_EVALUATION_JSON_SCHEMA = {
         "hook_type": {"type": "string", "enum": HOOK_TYPES},
         "cliffhanger_type": {"type": "string", "enum": CLIFF_TYPES},
         "resolution_leak": {"type": "boolean"},
+        "emotional_promise": {"type": "string", "enum": EMOTIONAL_PROMISES},
+        "protagonist_clear": {"type": "boolean"},
         "hook_interrupt": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "hook_curiosity": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "hook_emotion": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "cliff_open_loop": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "cliff_stakes": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "cliff_cut_timing": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
+        "audience_fit": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
         "hook_score": {"type": "integer", "minimum": 1, "maximum": 10},
         "cliffhanger_score": {"type": "integer", "minimum": 1, "maximum": 10},
         "clarity_score": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -90,12 +108,15 @@ PROMO_EVALUATION_JSON_SCHEMA = {
         "hook_type",
         "cliffhanger_type",
         "resolution_leak",
+        "emotional_promise",
+        "protagonist_clear",
         "hook_interrupt",
         "hook_curiosity",
         "hook_emotion",
         "cliff_open_loop",
         "cliff_stakes",
         "cliff_cut_timing",
+        "audience_fit",
         "hook_score",
         "cliffhanger_score",
         "clarity_score",
@@ -131,6 +152,15 @@ Score cliff_open_loop, cliff_stakes, cliff_cut_timing separately, then cliffhang
 
 === CLARITY ===
 Could someone who never saw the show understand who the people are, what they want and why it matters, using only this clip? Heavy reliance on earlier episodes, too many characters, or long camera or action-only passages lower clarity.
+
+=== AUDIENCE: who you are trying to stop ===
+Industry reports describe the core viewers of English-language microdrama apps as women, mostly aged 25-55, with the heaviest engagement and spend from women 35+; men under-index. They watch on a phone in short stolen breaks and binge once hooked. Judge the clip for THEM, not for a generic viewer. What this audience tends to respond to (a working assumption, not a law):
+1. Righteous anger and justice fantasy: a sympathetic person is wronged or underestimated (by a spouse, in-law, boss or rival) and the viewer is desperate to see the reversal: revenge, a hidden identity revealed, the villain exposed.
+2. A protagonist to root for within seconds: someone whose pain or desire is instantly relatable. If no one in the clip is worth rooting for, audience_fit is low.
+3. Relationship stakes over spectacle: betrayal by someone close, forbidden or power-imbalanced romance, jealousy, protection, family secrets, a hidden child or pregnancy. Emotional stakes beat action for its own sake.
+4. Fairness violations in front of others: public humiliation, a false accusation, being replaced or dismissed.
+5. Anticipated payoff: the viewer should feel the comeuppance is coming and want to be there for it. Cutting right before the avenging or revealing moment is stronger than showing it.
+emotional_promise = the main feeling the clip promises the full show will pay off. protagonist_clear = true only if a sympathetic lead is identifiable within the clip itself. audience_fit = how strongly this audience would stop, root for the lead and tap to watch more.
 
 === CALIBRATION (important) ===
 1-3 = weak or absent, 4-6 = average (most clips belong here), 7-8 = strong, 9-10 = rare (you would stop scrolling for it). If you give 7 or above to everything you are being too generous. Be a harsh editor.
@@ -197,12 +227,21 @@ def evaluate_candidate(
 
 
 def promo_score(ev: PromoEvaluation) -> float:
-    w_hook, w_cliff, w_clarity = 0.40, 0.35, 0.25
-    return ev.hook_score ** w_hook * ev.cliffhanger_score ** w_cliff * ev.clarity_score ** w_clarity
+    parts = [(ev.hook_score, 0.35), (ev.cliffhanger_score, 0.30), (ev.clarity_score, 0.15)]
+    if ev.audience_fit is not None:
+        parts.append((ev.audience_fit, 0.20))
+    total_w = sum(w for _, w in parts)
+    return math.exp(sum(w * math.log(s) for s, w in parts) / total_w)
 
 
 def is_postable(ev: PromoEvaluation) -> bool:
-    return ev.hook_score >= 6 and ev.cliffhanger_score >= 6 and ev.clarity_score >= 5 and not ev.resolution_leak
+    return (
+        ev.hook_score >= 6
+        and ev.cliffhanger_score >= 6
+        and ev.clarity_score >= 5
+        and not ev.resolution_leak
+        and (ev.audience_fit is None or ev.audience_fit >= 5)
+    )
 
 
 def apply_caps(ev: PromoEvaluation) -> PromoEvaluation:
@@ -228,7 +267,20 @@ def apply_caps(ev: PromoEvaluation) -> PromoEvaluation:
     if cliff_subs:
         cliff = min(cliff, math.ceil(sum(cliff_subs) / len(cliff_subs)) + 1)
 
-    return ev.model_copy(update={"hook_score": _clamp(1, 10, hook), "cliffhanger_score": _clamp(1, 10, cliff)})
+    audience = ev.audience_fit
+    if audience is not None:
+        if not ev.protagonist_clear:
+            audience = min(audience, 4)
+        if ev.emotional_promise == "none":
+            audience = min(audience, 5)
+
+    return ev.model_copy(
+        update={
+            "hook_score": _clamp(1, 10, hook),
+            "cliffhanger_score": _clamp(1, 10, cliff),
+            "audience_fit": _clamp(1, 10, audience) if audience is not None else None,
+        }
+    )
 
 
 def _evaluate_with_gemini(prompt: str, api_key: str, model: str) -> PromoEvaluation:
@@ -388,6 +440,18 @@ def mock_evaluate_candidate(candidate: PromoCandidate) -> PromoEvaluation:
     hook_element = _best_line(first, HOOK_WORDS) or _first_non_empty_line(first) or candidate.first_3s_text[:120]
     cliffhanger_element = _best_line(last, CLIFF_WORDS) or _last_non_empty_line(last) or candidate.last_5s_text[:120]
 
+    emotional_promise = _guess_emotional_promise(full)
+    protagonist_clear = _has_sympathetic_protagonist(first, full)
+    audience_fit = _clamp(
+        1,
+        10,
+        round(3 + min(_keyword_hits(full, TROPE_WORDS), 4) + (1.0 if _has_direct_conflict(first) else 0.0)),
+    )
+    if not protagonist_clear:
+        audience_fit = min(audience_fit, 4)
+    if emotional_promise == "none":
+        audience_fit = min(audience_fit, 5)
+
     red_flags = []
     if hook_score <= 4:
         red_flags.append("weak or slow opening")
@@ -406,12 +470,15 @@ def mock_evaluate_candidate(candidate: PromoCandidate) -> PromoEvaluation:
         hook_type="none",
         cliffhanger_type="none",
         resolution_leak=False,
+        emotional_promise=emotional_promise,
+        protagonist_clear=protagonist_clear,
         hook_interrupt=None,
         hook_curiosity=None,
         hook_emotion=None,
         cliff_open_loop=None,
         cliff_stakes=None,
         cliff_cut_timing=None,
+        audience_fit=audience_fit,
         hook_score=hook_score,
         cliffhanger_score=cliffhanger_score,
         clarity_score=clarity_score,
@@ -457,6 +524,9 @@ def _normalize_payload(payload: object) -> dict:
         "hook_type",
         "cliffhanger_type",
         "resolution_leak",
+        "emotional_promise",
+        "protagonist_clear",
+        "audience_fit",
         "red_flags",
     }
     if required.issubset(payload.keys()):
@@ -485,12 +555,15 @@ def _normalize_payload(payload: object) -> dict:
         "hook_type": str(payload.get("hook_type") or "none"),
         "cliffhanger_type": str(payload.get("cliffhanger_type") or "none"),
         "resolution_leak": bool(payload.get("resolution_leak", False)),
+        "emotional_promise": str(payload.get("emotional_promise") or "none"),
+        "protagonist_clear": bool(payload.get("protagonist_clear", False)),
         "hook_interrupt": _score(hook_eval),
         "hook_curiosity": _score(hook_eval),
         "hook_emotion": _score(hook_eval),
         "cliff_open_loop": _score(cliff_eval),
         "cliff_stakes": _score(cliff_eval),
         "cliff_cut_timing": _score(cliff_eval),
+        "audience_fit": _score(payload.get("audience_fit")) if payload.get("audience_fit") is not None else None,
         "hook_score": _score(hook_eval),
         "cliffhanger_score": _score(cliff_eval),
         "clarity_score": _score(clarity_eval),
@@ -512,6 +585,28 @@ def _has_direct_conflict(text: str) -> bool:
         term in low
         for term in ("don't", "do not", "you lied", "liar", "leave", "back off", "move", "answer me", "get out", "how dare")
     )
+
+
+def _has_sympathetic_protagonist(first: str, full: str) -> bool:
+    low = f"{first} {full}".lower()
+    return any(term in low for term in ("wife", "husband", "mother", "father", "child", "baby", "pregnant", "victim", "save me", "help me", "please"))
+
+
+def _guess_emotional_promise(full: str) -> str:
+    low = full.lower()
+    if any(term in low for term in ("revenge", "betray", "cheat", "cheating", "humiliate", "exposed", "false accusation", "lied")):
+        return "betrayal_exposed"
+    if any(term in low for term in ("secret identity", "true identity", "heir", "heiress", "not your")):
+        return "secret_identity_reveal"
+    if any(term in low for term in ("love", "kiss", "marry", "marriage", "wedding", "fiancé", "fiance", "romance")):
+        return "romantic_tension"
+    if any(term in low for term in ("family", "mother-in-law", "in-law", "dad", "mom", "sister", "brother")):
+        return "family_conflict"
+    if any(term in low for term in ("kill", "die", "survive", "fire", "burn", "danger", "save", "escape")):
+        return "survival_threat"
+    if any(term in low for term in ("justice", "revenge", "pay for", "ruin", "punish")):
+        return "justice_revenge"
+    return "none"
 
 
 def _speaker_count(candidate: PromoCandidate) -> int:
