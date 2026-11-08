@@ -16,9 +16,6 @@ def tag_failure_modes(candidate: PromoCandidate) -> list[str]:
     if candidate.evaluation is None:
         return tags
 
-    if _visual_pacing_risk(candidate) > 0.40:
-        tags.append("TAG: VISUAL_PACING_RISK")
-
     if _mid_monologue_cut(candidate):
         tags.append("TAG: MID_MONOLOGUE_CUT")
 
@@ -59,18 +56,6 @@ def rank_promos(candidates: list[PromoCandidate], max_promos: int = 3) -> list[P
 
 def _overlap_seconds(a: PromoCandidate, b: PromoCandidate) -> float:
     return max(0.0, min(a.end_sec, b.end_sec) - max(a.start_sec, b.start_sec))
-
-
-def _visual_pacing_risk(candidate: PromoCandidate) -> float:
-    if candidate.duration_sec <= 0:
-        return 0.0
-
-    camera_duration = 0.0
-    for block in candidate.blocks:
-        if _is_camera_like(block.text, block.block_type):
-            camera_duration += block.duration
-
-    return camera_duration / candidate.duration_sec
 
 
 def _is_camera_like(text: str, block_type: str) -> bool:

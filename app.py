@@ -210,7 +210,6 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Input")
-        st.caption("API key and model are loaded from `.env`.")
 
         with st.form("promo_form", clear_on_submit=False):
             uploads = st.file_uploader(
